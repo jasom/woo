@@ -23,18 +23,10 @@
                 :http-minor-version
                 :parsing-error
                 :fast-http-error)
-  (:import-from :cl-async
-                :socket-closed
-                :write-socket-data
-                :socket-data
-                :close-socket
-                :with-event-loop
-                :tcp-server
-                :close-tcp-server
-                :tcp-info
-                :tcp-error
-                :tcp-eof
-                :tcp-socket)
+  (:import-from #:basic-binary-ipc
+		#:data-available-p
+		#:ready-to-write-p
+		#:remote-disconnected-p)
   (:import-from :fast-io
                 :make-output-buffer
                 :finish-output-buffer
@@ -55,6 +47,7 @@
                 :release-lock
                 :threadp)
   (:import-from :alexandria
+		:ensure-list
                 :hash-table-plist
                 :copy-stream
                 :if-let)
@@ -73,13 +66,12 @@
         (*app* app)
         (*debug* debug))
     (flet ((start-server ()
-             (as:with-event-loop (:catch-app-errors t)
-               (as:tcp-server address port
-                              #'read-cb
-                              #'event-cb
-                              :connect-cb #'connect-cb)
-               (bt:release-lock server-started-lock)))
-           #-windows
+	     (bbi-wrap:tcp-loop address port #'read-cb #'event-cb #'connect-cb
+			   (lambda () (bt:release-lock server-started-lock))))
+
+	   (start-server-multi () (error "Not implemented yet"))
+           ;#-windows
+	     #+(or)
            (start-server-multi ()
              (as:with-event-loop (:catch-app-errors t)
                (as:tcp-server address port
@@ -116,7 +108,7 @@
   (setup-parser socket))
 
 (defun read-cb (socket data)
-  (let ((parser (as:socket-data socket)))
+  (let ((parser (bbi-wrap:socket-data socket)))
     (handler-case (funcall parser data)
       (fast-http:parsing-error (e)
         (log:error "fast-http parsing error: ~A" e)
@@ -128,17 +120,7 @@
         (finish-response socket #.(trivial-utf-8:string-to-utf-8-bytes "Internal Server Error"))))))
 
 (defun event-cb (event)
-  (typecase event
-    (as:tcp-eof ())
-    (as:tcp-error ()
-     (log:error (princ-to-string event)))
-    (as:tcp-info
-     (log:info (princ-to-string event))
-     (let ((socket (as:tcp-socket event)))
-       (write-response-headers socket 500 ())
-       (finish-response socket "Internal Server Error")))
-    (T
-     (log:info event))))
+  (log:debug (princ-to-string event)))
 
 (define-condition woo-error (simple-error) ())
 (define-condition not-implemented-yet (woo-error) ())
@@ -156,7 +138,7 @@
 (defun setup-parser (socket)
   (let ((http (make-http-request))
         (body-buffer (fast-io::make-output-buffer)))
-    (setf (as:socket-data socket)
+    (setf (bbi-wrap:socket-data socket)
           (make-parser http
                        :body-callback
                        (lambda (data)
@@ -180,7 +162,7 @@
 (defun stop (server)
   (if (bt:threadp server)
       (bt:destroy-thread server)
-      (as:close-tcp-server server)))
+      (error "Not implemented yet")))
 
 
 ;;
@@ -230,10 +212,10 @@
         (function (funcall clack-res (lambda (clack-res)
                                        (handler-case
                                            (handle-normal-response http socket clack-res)
-                                         (as:socket-closed ()))))))
-    (as:tcp-error (e)
+                                         (nil ())))))) ;TODO handle an error
+    #+(or)(as:tcp-error (e)
       (log:error e))
-    (t (e)
+    (nil (e)
       (log:error e))))
 
 (defun handle-normal-response (http socket clack-res)
@@ -266,7 +248,7 @@
                     (force-output stream)
                     (finish-response socket *empty-chunk*)))
         (list
-         (as:write-socket-data
+         (bbi-wrap:write-socket-data
           socket
           (with-fast-output (buffer :vector)
             (cond

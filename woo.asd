@@ -16,7 +16,7 @@
   :version "0.0.1"
   :author "Eitaro Fukamachi"
   :license "MIT"
-  :depends-on (:cl-async
+  :depends-on (:basic-binary-ipc
                :fast-http
                :quri
                :fast-io
@@ -32,7 +32,8 @@
   :components ((:module "src"
                 :components
                 ((:file "woo" :depends-on ("response"))
-                 (:file "response"))))
+                 (:file "response" :depends-on ("bbi-wrap"))
+		 (:file "bbi-wrap"))))
   :description "An asynchronous HTTP server written in Common Lisp"
   :long-description
   #.(with-open-file (stream (merge-pathnames

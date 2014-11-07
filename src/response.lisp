@@ -1,11 +1,10 @@
 (in-package :cl-user)
 (defpackage woo.response
   (:use :cl)
-  (:import-from :cl-async
-                :socket-data
-                :write-socket-data
-                :async-io-stream
-                :close-socket)
+  (:import-from :woo.bbi-wrap
+		:write-socket-data
+		:socket-data
+		:close-socket)
   (:import-from :chunga
                 :make-chunked-stream
                 :chunked-stream-output-chunking-p )
@@ -140,7 +139,7 @@
              (fast-write-crlf buffer)))
 
 (defun write-response-headers (socket status headers &optional keep-alive-p)
-  (as:write-socket-data
+  (bbi-wrap:write-socket-data
    socket
    (with-fast-output (buffer :vector)
      (response-headers-bytes buffer status headers keep-alive-p)
@@ -150,13 +149,13 @@
   (write-response-headers socket status (append headers
                                                 (list :transfer-encoding "chunked")))
 
-  (let* ((async-stream (make-instance 'as:async-io-stream :socket socket))
+  (let* ((async-stream (make-instance 'bbi-wrap:bbi-output-stream :socket socket))
          (chunked-stream (chunga:make-chunked-stream async-stream)))
     (setf (chunga:chunked-stream-output-chunking-p chunked-stream) t)
     chunked-stream))
 
 (defun finish-response (socket &optional (body *empty-bytes*))
-  (as:write-socket-data socket body
+  (write-socket-data socket body
                         :write-cb (lambda (socket)
-                                    (setf (as:socket-data socket) nil)
-                                    (as:close-socket socket))))
+                                    (setf (socket-data socket) nil)
+                                    (close-socket socket))))
