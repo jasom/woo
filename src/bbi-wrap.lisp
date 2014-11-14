@@ -22,20 +22,36 @@
    ))
 
 (in-package :woo.bbi-wrap)
+(declaim (optimize (speed 3) (debug 0)))
 
 (defstruct server sock clients)
-(defstruct socket data sock outputs output-pos events server)
+(defstruct socket fastio data sock outputs output-pos (events nil :type list) server)
 
 (defun write-socket-data (client data &key write-cb)
   (let ((data (etypecase data
 		(string (trivial-utf-8:string-to-utf-8-bytes data))
 		((vector (unsigned-byte 8)) data))))
-    (setf (socket-outputs client)
-	  (append (socket-outputs client) (list (cons data write-cb))))
+    (unless (socket-fastio client)
+      (setf (socket-fastio client) (fast-io::make-output-buffer)))
+    (fast-io:fast-write-sequence data (socket-fastio client))
+    (when write-cb
+      (setf (socket-outputs client)
+	    (nconc (socket-outputs client) (list (cons (fast-io::finish-output-buffer (socket-fastio client)) write-cb)))
+	    (socket-fastio client) nil))
     (pushnew 'basic-binary-ipc:ready-to-write-p (socket-events client))))
 
+(defun data-remaining (client)
+  (cond
+    ((socket-outputs client) t)
+    ((socket-fastio client)
+     (push (cons (fast-io::finish-output-buffer (socket-fastio client)) nil)
+	   (socket-outputs client))
+     (setf (socket-fastio client) nil)
+     t)
+    (t nil)))
+
 (defun send-some-data (client)
-  (if (not (socket-outputs client))
+  (if (not (data-remaining client))
       (setf (socket-events client)
 	    (delete 'ready-to-write-p (socket-events client)))
       (loop
@@ -51,7 +67,7 @@
 	     (funcall (cdar (socket-outputs client)) client))
 	   (pop (socket-outputs client))
 	   (setf (socket-output-pos client) 0)
-	 unless (socket-outputs client)
+	 unless (data-remaining client)
 	 do (setf (socket-events client)
 		  (delete 'ready-to-write-p (socket-events client)))
 	   (return))))
@@ -87,7 +103,11 @@
 			  (when (member 'data-available-p events)
 			    (loop for bytes = (basic-binary-ipc:read-from-stream
 					       (socket-sock client) buffer)
-			       when (> bytes 0) do (funcall read-cb client (subseq buffer 0 bytes))
+			       when (> bytes 0) do
+				 (funcall read-cb client (subseq buffer 0 bytes))
+				 #+(or)(let ((buf (make-array bytes :element-type '(unsigned-byte 8))))
+				   (map-into buf #'identity buffer)
+				   (funcall read-cb client buf))
 			       while (= bytes bufsize)))
 			  (when (member 'ready-to-write-p events)
 			    (send-some-data client)))))))))
@@ -97,8 +117,11 @@
 					      (cons 'connection-available-p
 						    (mapcar #'socket-events clients))
 					      :indefinite)
-	     when server-e do (push (new-connection srv) clients)
-	       (funcall connect-cb (car clients))
+	     when server-e do (loop while (basic-binary-ipc:connection-available-p server)
+				   for conn = (new-connection srv)
+				   while conn
+				   do (push conn clients)
+				   (funcall connect-cb (car clients)))
 	     do (mapc #'client-work clients clients-e)))))))
 
 ;Streams
